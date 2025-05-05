@@ -1,0 +1,20 @@
+[package]
+name = "repoyank"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tim Koornstra"]
+description = "Traverse your repo, interactively select files and directories, and yank a structured code snippet summary to your clipboard."
+license = "MIT"
+repository = "https://github.com/TimKoornstra/repoyanker"
+readme = "README.md"
+keywords = ["clipboard", "files", "snippets", "repo", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+ignore = "0.4"
+walkdir = "2.4"
+dialoguer = "0.11"
+arboard = { version = "3.5.0", features = ["wayland-data-control"] }
+anyhow = "1.0"
+
