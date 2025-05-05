@@ -4,8 +4,6 @@
 
 > **Status:** Work-in-progress (WIP)
 
----
-
 ## Features
 
 * **Interactive tree view** of your repository.
@@ -56,8 +54,7 @@ After confirming your selections, `repoyank` will copy something like the follow
 ```
 ./
 ├─ src/
-│  ├─ main.rs
-│  └─ lib.rs
+│  └─ main.rs
 └─ README.md
 
 ---
@@ -84,8 +81,7 @@ Paste anywhere to see a neat, combined view of your selections.
 1. Clone the repo:
 
    ```bash
-   ```
-    git clone [https://github.com/TimKoornstra/repoyank.git](https://github.com/TimKoornstra/repoyank.git)
+    git clone https://github.com/TimKoornstra/repoyank.git
     cd repoyank
     ```
 
