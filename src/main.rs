@@ -1,321 +1,191 @@
-use std::collections::HashMap;
-use std::path::Component;
-use std::{ffi::OsStr, fs, path::PathBuf};
+mod cli;
+mod clipboard;
+mod file_scanner;
+mod tree_builder;
+mod utils;
 
-use arboard::Clipboard;
-#[cfg(target_os = "linux")]
-use arboard::SetExtLinux;
-use clap::{Parser, ValueEnum};
-use dialoguer::{theme::ColorfulTheme, MultiSelect};
-use ignore::WalkBuilder;
+use anyhow::Result;
+use clap::Parser;
+use dialoguer::{MultiSelect, theme::ColorfulTheme};
+use ignore::WalkBuilder as IgnoreWalkBuilder;
+use std::{fs, path::PathBuf};
 
-/// Internal flag – don’t document it, just keep it unlikely to clash
-const DAEMON_FLAG: &str = "__clipboard_daemon";
-
-/// Rough estimate: GPT-style token ≈ 4 chars (good enough for UI)
-fn approx_tokens(s: &str) -> usize {
-    s.chars().count() / 4
-}
-
-/// A comma-separated list of file-extensions passed via --types
-#[derive(Clone, Debug, ValueEnum)]
-enum Ext {
-    Rs,
-    Md,
-    Ex,
-    Exs,
-    Txt,
-    Json,
-    Yaml,
-    Toml,
-    // add more as needed
-}
-
-impl Ext {
-    fn as_os_str(&self) -> &'static OsStr {
-        match self {
-            Ext::Rs => OsStr::new("rs"),
-            Ext::Md => OsStr::new("md"),
-            Ext::Ex => OsStr::new("ex"),
-            Ext::Exs => OsStr::new("exs"),
-            Ext::Txt => OsStr::new("txt"),
-            Ext::Json => OsStr::new("json"),
-            Ext::Yaml => OsStr::new("yaml"),
-            Ext::Toml => OsStr::new("toml"),
-        }
-    }
-}
-
-/// repoyank – copy annotated source snippets to clipboard
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    /// Root to scan (defaults to CWD)
-    #[arg(value_name = "DIR", default_value = ".")]
-    root: PathBuf,
-
-    /// Comma-separated file-types to include (extension only, no dot).
-    #[arg(long, value_delimiter = ',')]
-    types: Vec<Ext>,
-
-    /// Include files ignored by .gitignore
-    #[arg(long)]
-    include_ignored: bool,
-}
-
-/// Build pretty tree-style labels in **O(n)**.
-///
-/// * `paths` **must** be lexicographically sorted the same way `tree` does
-/// * Each element in `paths` is `(path, is_dir)`.
-pub fn build_tree_labels(paths: &[(PathBuf, bool)], root: &PathBuf) -> Vec<String> {
-    let n = paths.len();
-    let mut labels = Vec::with_capacity(n);
-    let mut is_last_vec = vec![false; n];
-    let mut last_child_map = HashMap::<PathBuf, usize>::new();
-
-    // PASS #1 – record each directory’s last immediate child index
-    for (idx, (path, _)) in paths.iter().enumerate() {
-        let rel = path.strip_prefix(root).unwrap_or(path);
-        let parent = rel.parent().unwrap_or(std::path::Path::new(""));
-        last_child_map.insert(parent.to_path_buf(), idx);
-    }
-
-    // PASS #2 – scan once, using a stack to track ancestors
-    let mut ancestor_stack: Vec<usize> = Vec::new();
-    for (idx, (path, is_dir)) in paths.iter().enumerate() {
-        let rel = path.strip_prefix(root).unwrap_or(path);
-        let depth = rel.components().count();
-
-        while ancestor_stack.len() > depth {
-            ancestor_stack.pop();
-        }
-
-        let parent = rel.parent().unwrap_or(std::path::Path::new(""));
-        let is_last = last_child_map[&parent.to_path_buf()] == idx;
-        is_last_vec[idx] = is_last;
-
-        // Build indentation only if we’re *below* the root.
-        let mut prefix = String::new();
-        if depth >= 1 {
-            // skip the root-level ancestor so direct children don't get a leading "│  "
-            if depth > 1 {
-                for &anc in &ancestor_stack[1..] {
-                    prefix.push_str(if is_last_vec[anc] { "   " } else { "│  " });
-                }
-            }
-            // now draw the branch for *this* node
-            prefix.push_str(if is_last { "└─ " } else { "├─ " });
-        }
-
-        let name = rel
-            .components()
-            .last()
-            .unwrap_or(Component::CurDir)
-            .as_os_str()
-            .to_string_lossy();
-        // Special-case the project root so it prints as “./”
-        let label = if depth == 0 {
-            "./".to_string()
-        } else if *is_dir {
-            format!("{}{}/", prefix, name)
-        } else {
-            format!("{}{}", prefix, name)
-        };
-        labels.push(label);
-        ancestor_stack.push(idx);
-    }
-
-    labels
-}
-
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    // ──────────────────────────────────────────────────────────────
-    // If we *are* the daemon, read stdin, set clipboard, and stay alive
-    // ──────────────────────────────────────────────────────────────
-    #[cfg(target_os = "linux")]
-    if std::env::args().any(|a| a == DAEMON_FLAG) {
-        // Read all of stdin as the clipboard text
-        let text = std::io::read_to_string(std::io::stdin())?;
-
-        // Claim ownership and provide the data, keeping the Waiter alive
-        let _waiter = Clipboard::new()? // 1. open clipboard
-            .set() // 2. request ownership
-            .wait() // 3. wait until we have it
-            .text(text)?; // 4. supply the clipboard bytes
-
-        // Keep the process alive so the clipboard stays valid
-        std::thread::park();
-        unreachable!();
-    }
-
-    // Build the file tree ------------------------------------------------
-    let mut tree: Vec<(PathBuf, bool)> = Vec::new();
-    let mut walker = WalkBuilder::new(&cli.root);
-    if cli.include_ignored {
-        walker.git_ignore(false).ignore(false);
-    }
-    for result in walker.build() {
-        let dirent = match result {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("⚠️  {e}");
-                continue;
-            }
-        };
-
-        if !cli.types.is_empty() && dirent.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            let keep = cli
-                .types
-                .iter()
-                .any(|ext| dirent.path().extension() == Some(ext.as_os_str()));
-            if !keep {
-                continue;
-            }
-        }
-
-        let is_dir = dirent.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-        let path = dirent.into_path();
-        tree.push((path, is_dir));
-    }
-    tree.sort();
-
-    // Generate display labels
-    let items = build_tree_labels(&tree, &cli.root);
-
-    // Prompt the user -----------------------------------------------------
-    let selections = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select files or directories (space to toggle, ⏎ to confirm)")
-        .items(&items)
-        .interact()?;
-
-    if selections.is_empty() {
-        println!("No files selected – exiting.");
+fn main() -> Result<()> {
+    // Handle daemon mode first.
+    if clipboard::check_and_run_daemon_if_requested()? {
         return Ok(());
     }
 
-    let selections_clone = selections.clone();
+    let cli_args = cli::Cli::parse();
 
-    // Expand directories into picked_files (unchanged)
-    let mut picked_files = Vec::<PathBuf>::new();
-    for idx in &selections_clone {
-        let (sel_path, sel_is_dir) = &tree[*idx];
-        if *sel_is_dir {
-            for entry in WalkBuilder::new(sel_path).build() {
-                if let Ok(ent) = entry {
-                    if ent.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                        picked_files.push(ent.into_path());
+    // 1. Scan all potential files and directories based on CLI args
+    let all_discovered_items =
+        file_scanner::scan_files(&cli_args.root, &cli_args.types, cli_args.include_ignored)?;
+
+    if all_discovered_items.is_empty()
+        || (all_discovered_items.len() == 1
+            && all_discovered_items[0].0 == cli_args.root
+            && all_discovered_items[0].1)
+    {
+        println!("No matching files or non-empty directories found to select from.");
+        return Ok(());
+    }
+
+    // 2. Build a provisional tree
+    let display_labels = tree_builder::build_tree_labels(&all_discovered_items, &cli_args.root);
+
+    if display_labels.is_empty() || (display_labels.len() == 1 && display_labels[0] == "./") {
+        println!(
+            "No items to display for selection after filtering (or only root './' which is implicitly included)."
+        );
+        return Ok(());
+    }
+
+    // 3. Prompt the user for selections
+    let selections_indices = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select files or directories (Space to toggle, Enter to confirm)")
+        .items(&display_labels)
+        .interact()?;
+
+    if selections_indices.is_empty() {
+        println!("No items selected. Exiting.");
+        return Ok(());
+    }
+
+    // 4. Determine the actual files to include based on selections
+    let mut picked_files_content: Vec<PathBuf> = Vec::new();
+    for &selected_idx in &selections_indices {
+        let (selected_path, is_dir) = &all_discovered_items[selected_idx];
+        if *is_dir {
+            let mut dir_walker = IgnoreWalkBuilder::new(selected_path);
+            if cli_args.include_ignored {
+                dir_walker.git_ignore(false).ignore(false);
+            }
+            for entry_result in dir_walker.build() {
+                if let Ok(entry) = entry_result {
+                    if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                        let path = entry.into_path();
+                        if !cli_args.types.is_empty() {
+                            let keep = cli_args
+                                .types
+                                .iter()
+                                .any(|ext| path.extension() == Some(ext.as_os_str()));
+                            if keep {
+                                picked_files_content.push(path);
+                            }
+                        } else {
+                            picked_files_content.push(path);
+                        }
                     }
                 }
             }
         } else {
-            picked_files.push(sel_path.clone());
+            picked_files_content.push(selected_path.clone());
         }
     }
-    picked_files.sort();
-    picked_files.dedup();
+    picked_files_content.sort();
+    picked_files_content.dedup();
 
-    if picked_files.is_empty() {
-        println!("Nothing to copy.");
+    if picked_files_content.is_empty() {
+        println!("No actual files to copy after expanding selections. Exiting.");
         return Ok(());
     }
 
-    // 1. Rebuild the tree labels to include every descendant of a selected dir
-    let mut chosen_nodes: Vec<(PathBuf, bool)> = tree
-        .iter()
-        .filter(|(path, _)| {
-            selections_clone.iter().any(|&idx| {
-                let (sel_path, sel_is_dir) = &tree[idx];
-                // if the selection was a directory, include all paths under it,
-                // otherwise include only the exact file
-                if *sel_is_dir {
-                    path.starts_with(sel_path)
-                } else {
-                    path == sel_path
-                }
-            })
-        })
-        .cloned()
-        .collect();
-
-    // ensure the root itself is shown at depth 0
-    if !chosen_nodes.iter().any(|(p, _)| p == &cli.root) {
-        chosen_nodes.push((cli.root.clone(), true));
+    // 5. Construct the list of nodes for the output tree display
+    let mut final_tree_nodes: Vec<(PathBuf, bool)> = Vec::new();
+    if !all_discovered_items.is_empty() && all_discovered_items[0].0 == cli_args.root {
+        final_tree_nodes.push(all_discovered_items[0].clone());
+    } else if cli_args.root.exists() {
+        final_tree_nodes.push((cli_args.root.clone(), true));
     }
 
-    // include all ancestors of every chosen node, so intermediate dirs show up
-    let mut extra = Vec::new();
-    for (path, _) in &chosen_nodes {
-        // walk up from `path` to `cli.root`
-        let mut cur = path.parent();
-        while let Some(parent) = cur {
-            if parent.starts_with(&cli.root)
-                && !chosen_nodes.iter().any(|(p, _)| p == parent)
-                && !extra.iter().any(|(p, _)| p == parent)
-            {
-                // look up in `tree` to see if it's really a dir (it should be)
-                let is_dir = tree
-                    .iter()
-                    .find(|(p2, _)| p2 == parent)
-                    .map(|(_, d)| *d)
-                    .unwrap_or(true);
-                extra.push((parent.to_path_buf(), is_dir));
+    for (path, is_dir) in &all_discovered_items {
+        let directly_selected = selections_indices
+            .iter()
+            .any(|&idx| all_discovered_items[idx].0 == *path);
+        let descendant_of_selected_dir = selections_indices.iter().any(|&idx| {
+            let (sel_path, sel_is_dir) = &all_discovered_items[idx];
+            *sel_is_dir && path.starts_with(sel_path) && path != sel_path
+        });
+
+        if directly_selected || descendant_of_selected_dir {
+            final_tree_nodes.push((path.clone(), *is_dir));
+            let mut current = path.clone();
+            while let Some(parent) = current.parent() {
+                if parent == cli_args.root && !final_tree_nodes.iter().any(|(p, _)| p == parent) {
+                    if let Some(root_item) = all_discovered_items
+                        .iter()
+                        .find(|(p, _)| p == &cli_args.root)
+                    {
+                        final_tree_nodes.push(root_item.clone());
+                    } else {
+                        final_tree_nodes.push((parent.to_path_buf(), true));
+                    }
+                    break;
+                }
+                if parent.starts_with(&cli_args.root) && parent != &cli_args.root {
+                    if !final_tree_nodes.iter().any(|(p, _)| p == parent) {
+                        let parent_is_dir = all_discovered_items
+                            .iter()
+                            .find(|(p, _)| p == parent)
+                            .map_or(true, |(_, is_d)| *is_d);
+                        final_tree_nodes.push((parent.to_path_buf(), parent_is_dir));
+                    }
+                } else {
+                    break;
+                }
+                current = parent.to_path_buf();
             }
-            cur = parent.parent();
         }
     }
-    chosen_nodes.extend(extra);
-    chosen_nodes.sort();
+    final_tree_nodes.sort_by(|(a, _), (b, _)| a.cmp(b));
+    final_tree_nodes.dedup_by(|(a, _), (b, _)| a == b);
 
-    let chosen_tree = build_tree_labels(&chosen_nodes, &cli.root);
-
-    let mut output = String::new();
-    for line in chosen_tree {
-        output.push_str(&line);
-        output.push('\n');
+    // 6. Build the output tree
+    let output_tree_labels = tree_builder::build_tree_labels(&final_tree_nodes, &cli_args.root);
+    let mut output_string = String::new();
+    for label in output_tree_labels {
+        output_string.push_str(&label);
+        output_string.push('\n');
     }
-    output.push('\n'); // blank line before the file bodies
+    output_string.push('\n');
 
-    // ────────────────────────────────────────────────────────────────────
-    // 2. Concatenate the contents (existing behaviour)
-    // ────────────────────────────────────────────────────────────────────
-    for file in &picked_files {
-        let rel = file.strip_prefix(&cli.root).unwrap_or(file);
-        let contents = fs::read_to_string(file)?;
-        output.push_str(&format!(
-            "---\nFile: {}\n---\n\n{}\n\n",
-            rel.display(),
-            contents
-        ));
+    // 7. Append file contents
+    for file_path in &picked_files_content {
+        let relative_path = file_path.strip_prefix(&cli_args.root).unwrap_or(file_path);
+        match fs::read_to_string(file_path) {
+            Ok(contents) => {
+                output_string.push_str(&format!(
+                    "---\nFile: {}\n---\n\n{}\n\n",
+                    relative_path.display(),
+                    contents.trim_end()
+                ));
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Warning: Could not read file {}: {}",
+                    file_path.display(),
+                    e
+                );
+                output_string.push_str(&format!(
+                    "---\nFile: {} (Error reading file: {})\n---\n\n[Content not available]\n\n",
+                    relative_path.display(),
+                    e
+                ));
+            }
+        }
     }
+    let final_output_string = output_string.trim_end_matches('\n').to_string() + "\n";
 
-    // Append token estimate
-    let tokens = approx_tokens(&output);
-
-    // Spawn daemon or set directly ---------------------------------------
-    #[cfg(not(target_os = "linux"))]
-    Clipboard::new()?.set_text(output.clone())?;
-
-    #[cfg(target_os = "linux")]
-    {
-        // Launch the daemon helper to hold the clipboard
-        use std::process::{Command, Stdio};
-        let mut child = Command::new(std::env::current_exe()?)
-            .arg(DAEMON_FLAG)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .current_dir("/")
-            .spawn()?;
-        use std::io::Write;
-        child.stdin.as_mut().unwrap().write_all(output.as_bytes())?;
-    }
+    // 8. Copy to clipboard and print summary
+    let tokens = utils::approx_tokens(&final_output_string);
+    clipboard::copy_text_to_clipboard(final_output_string)?;
 
     println!(
         "✅ Copied {} files (≈ {} tokens) to the clipboard.",
-        picked_files.len(),
+        picked_files_content.len(),
         tokens
     );
+
     Ok(())
 }

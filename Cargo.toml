@@ -1,10 +1,10 @@
 [package]
 name = "repoyank"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Tim Koornstra"]
 description = "Traverse your repo, interactively select files and directories, and yank a structured code snippet summary to your clipboard."
-license = "MIT"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/TimKoornstra/repoyanker"
 readme = "README.md"
 keywords = ["clipboard", "files", "snippets", "repo", "cli"]
