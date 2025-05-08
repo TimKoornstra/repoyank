@@ -8,7 +8,12 @@ use anyhow::Result;
 use clap::Parser;
 use dialoguer::{MultiSelect, theme::ColorfulTheme};
 use ignore::WalkBuilder as IgnoreWalkBuilder;
-use std::{fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    fs,
+    path::PathBuf,
+};
 
 fn main() -> Result<()> {
     // Handle daemon mode first.
@@ -19,27 +24,51 @@ fn main() -> Result<()> {
     let cli_args = cli::Cli::parse();
 
     // 1. Scan all potential files and directories based on CLI args
-    let all_discovered_items =
+    let initial_scan_results =
         file_scanner::scan_files(&cli_args.root, &cli_args.types, cli_args.include_ignored)?;
 
-    if all_discovered_items.is_empty()
-        || (all_discovered_items.len() == 1
-            && all_discovered_items[0].0 == cli_args.root
-            && all_discovered_items[0].1)
-    {
+    // Filter out directories that are effectively empty after type filtering for the selection prompt
+    let mut paths_for_selection_prompt_set = HashSet::new();
+
+    for (path, is_dir) in &initial_scan_results {
+        if !*is_dir {
+            // It's a file that passed type filters
+            paths_for_selection_prompt_set.insert(path.clone());
+
+            let mut current_ancestor = path.parent();
+            while let Some(ancestor_path) = current_ancestor {
+                // Only consider ancestors within or at the root level
+                if ancestor_path.starts_with(&cli_args.root) || ancestor_path == &cli_args.root {
+                    paths_for_selection_prompt_set.insert(ancestor_path.to_path_buf());
+                    if ancestor_path == &cli_args.root {
+                        break; // Reached the root
+                    }
+                    current_ancestor = ancestor_path.parent();
+                } else {
+                    break; // Ancestor is outside the root, stop.
+                }
+            }
+        }
+    }
+
+    let initial_scan_map: HashMap<PathBuf, bool> = initial_scan_results.iter().cloned().collect();
+    let mut selectable_items: Vec<(PathBuf, bool)> = Vec::new();
+
+    for path in paths_for_selection_prompt_set {
+        if let Some(is_dir) = initial_scan_map.get(&path) {
+            selectable_items.push((path, *is_dir));
+        }
+    }
+
+    selectable_items.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    if selectable_items.is_empty() {
         println!("No matching files or non-empty directories found to select from.");
         return Ok(());
     }
 
-    // 2. Build a provisional tree
-    let display_labels = tree_builder::build_tree_labels(&all_discovered_items, &cli_args.root);
-
-    if display_labels.is_empty() || (display_labels.len() == 1 && display_labels[0] == "./") {
-        println!(
-            "No items to display for selection after filtering (or only root './' which is implicitly included)."
-        );
-        return Ok(());
-    }
+    // 2. Build a tree for the selection prompt using the filtered list
+    let display_labels = tree_builder::build_tree_labels(&selectable_items, &cli_args.root);
 
     // 3. Prompt the user for selections
     let selections_indices = MultiSelect::with_theme(&ColorfulTheme::default())
@@ -55,7 +84,7 @@ fn main() -> Result<()> {
     // 4. Determine the actual files to include based on selections
     let mut picked_files_content: Vec<PathBuf> = Vec::new();
     for &selected_idx in &selections_indices {
-        let (selected_path, is_dir) = &all_discovered_items[selected_idx];
+        let (selected_path, is_dir) = &selectable_items[selected_idx];
         if *is_dir {
             let mut dir_walker = IgnoreWalkBuilder::new(selected_path);
             if cli_args.include_ignored {
@@ -69,7 +98,7 @@ fn main() -> Result<()> {
                             let keep = cli_args
                                 .types
                                 .iter()
-                                .any(|ext| path.extension() == Some(ext.as_os_str()));
+                                .any(|ext_str| path.extension() == Some(OsStr::new(ext_str)));
                             if keep {
                                 picked_files_content.push(path);
                             }
@@ -93,42 +122,45 @@ fn main() -> Result<()> {
 
     // 5. Construct the list of nodes for the output tree display
     let mut final_tree_nodes: Vec<(PathBuf, bool)> = Vec::new();
-    if !all_discovered_items.is_empty() && all_discovered_items[0].0 == cli_args.root {
-        final_tree_nodes.push(all_discovered_items[0].clone());
+    // Add root node if it exists and was scanned. Its is_dir status from initial_scan_map.
+    if let Some(root_is_dir) = initial_scan_map.get(&cli_args.root) {
+        final_tree_nodes.push((cli_args.root.clone(), *root_is_dir));
     } else if cli_args.root.exists() {
-        final_tree_nodes.push((cli_args.root.clone(), true));
+        // Fallback if root wasn't in scan map for some reason (e.g. not a dir, or scan issue)
+        final_tree_nodes.push((cli_args.root.clone(), cli_args.root.is_dir()));
     }
 
-    for (path, is_dir) in &all_discovered_items {
+    for (path, is_dir) in &initial_scan_results {
+        // Iterate over all initially discovered items
         let directly_selected = selections_indices
             .iter()
-            .any(|&idx| all_discovered_items[idx].0 == *path);
+            .any(|&idx| selectable_items[idx].0 == *path);
+
         let descendant_of_selected_dir = selections_indices.iter().any(|&idx| {
-            let (sel_path, sel_is_dir) = &all_discovered_items[idx];
+            let (sel_path, sel_is_dir) = &selectable_items[idx];
             *sel_is_dir && path.starts_with(sel_path) && path != sel_path
         });
 
         if directly_selected || descendant_of_selected_dir {
-            final_tree_nodes.push((path.clone(), *is_dir));
+            if !final_tree_nodes.iter().any(|(p, _)| p == path) {
+                // Add if not already present
+                final_tree_nodes.push((path.clone(), *is_dir));
+            }
             let mut current = path.clone();
             while let Some(parent) = current.parent() {
                 if parent == cli_args.root && !final_tree_nodes.iter().any(|(p, _)| p == parent) {
-                    if let Some(root_item) = all_discovered_items
-                        .iter()
-                        .find(|(p, _)| p == &cli_args.root)
-                    {
-                        final_tree_nodes.push(root_item.clone());
-                    } else {
-                        final_tree_nodes.push((parent.to_path_buf(), true));
+                    if let Some(root_item_is_dir) = initial_scan_map.get(&cli_args.root) {
+                        final_tree_nodes.push((cli_args.root.clone(), *root_item_is_dir));
                     }
                     break;
                 }
                 if parent.starts_with(&cli_args.root) && parent != &cli_args.root {
                     if !final_tree_nodes.iter().any(|(p, _)| p == parent) {
-                        let parent_is_dir = all_discovered_items
-                            .iter()
-                            .find(|(p, _)| p == parent)
-                            .map_or(true, |(_, is_d)| *is_d);
+                        // Get is_dir status from initial_scan_map for accuracy
+                        let parent_is_dir = initial_scan_map
+                            .get(parent)
+                            .copied()
+                            .unwrap_or_else(|| parent.is_dir());
                         final_tree_nodes.push((parent.to_path_buf(), parent_is_dir));
                     }
                 } else {

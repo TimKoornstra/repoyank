@@ -1,11 +1,11 @@
-use crate::cli::Ext;
 use anyhow::Result;
 use ignore::WalkBuilder;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 pub fn scan_files(
     root: &Path,
-    types_filter: &[Ext],
+    types_filter: &[String],
     include_ignored: bool,
 ) -> Result<Vec<(PathBuf, bool)>> {
     let mut collected_paths: Vec<(PathBuf, bool)> = Vec::new();
@@ -43,7 +43,7 @@ pub fn scan_files(
             // Apply type filter only to files
             let keep = types_filter
                 .iter()
-                .any(|ext_filter| path.extension() == Some(ext_filter.as_os_str()));
+                .any(|ext_filter_str| path.extension() == Some(OsStr::new(ext_filter_str)));
             if !keep {
                 continue;
             }

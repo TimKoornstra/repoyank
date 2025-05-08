@@ -1,5 +1,4 @@
-use clap::{Parser, ValueEnum};
-use std::ffi::OsStr;
+use clap::Parser;
 use std::path::PathBuf;
 
 /// repoyank – copy annotated source snippets to clipboard
@@ -11,39 +10,10 @@ pub struct Cli {
     pub root: PathBuf,
 
     /// Comma-separated file-types to include (extension only, no dot).
-    #[arg(long, value_delimiter = ',')]
-    pub types: Vec<Ext>,
+    #[arg(long, value_delimiter = ',', value_name = "EXTENSIONS")]
+    pub types: Vec<String>,
 
     /// Include files ignored by .gitignore
     #[arg(long)]
     pub include_ignored: bool,
-}
-
-/// A comma-separated list of file-extensions passed via --types
-#[derive(Clone, Debug, ValueEnum)]
-pub enum Ext {
-    Rs,
-    Md,
-    Ex,
-    Exs,
-    Txt,
-    Json,
-    Yaml,
-    Toml,
-    // add more as needed
-}
-
-impl Ext {
-    pub fn as_os_str(&self) -> &'static OsStr {
-        match self {
-            Ext::Rs => OsStr::new("rs"),
-            Ext::Md => OsStr::new("md"),
-            Ext::Ex => OsStr::new("ex"),
-            Ext::Exs => OsStr::new("exs"),
-            Ext::Txt => OsStr::new("txt"),
-            Ext::Json => OsStr::new("json"),
-            Ext::Yaml => OsStr::new("yaml"),
-            Ext::Toml => OsStr::new("toml"),
-        }
-    }
 }
