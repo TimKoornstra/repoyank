@@ -380,7 +380,7 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
             Constraint::Length(3), // Title/Help
             Constraint::Min(0),    // List
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     let help_text = "Arrows/jk: Navigate | Space: Toggle Select | Tab/o: Toggle Fold | Enter: Confirm | q/Esc: Quit";
     let help_paragraph = Paragraph::new(help_text).block(
@@ -463,6 +463,7 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
                 .bg(Color::DarkGray),
         )
         .highlight_symbol("❯ ");
+
     // Create a ListState for rendering the visible part
     let mut list_state_for_view = ratatui::widgets::ListState::default();
     if let Some(selected_idx_in_visible_list) = current_selected_item_in_visible_list_idx_opt {
