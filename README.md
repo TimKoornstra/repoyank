@@ -19,11 +19,28 @@
 
 ## 📥 Installation
 
-Make sure [Rust](https://rustup.rs) is installed, then run:
+There are three easy ways to install `repoyank`:
 
-```bash
-cargo install --git https://github.com/TimKoornstra/repoyanker.git --branch main
-````
+1. **Via crates.io (Rust ecosystem)**
+
+   ```bash
+   cargo install repoyank
+   ```
+
+2. **Via AUR (Arch Linux)**
+   If you use an AUR helper like `paru` or `yay`, simply run:
+
+   ```bash
+   paru -S repoyank
+   # or
+   yay -S repoyank
+   ```
+
+3. **Latest development version (from GitHub)**
+
+   ```bash
+   cargo install --git https://github.com/TimKoornstra/repoyanker.git --branch main
+   ```
 
 ## 🛠 Usage
 
