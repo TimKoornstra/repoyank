@@ -3,19 +3,18 @@ name = "repoyank"
 version = "0.1.0"
 edition = "2024"
 authors = ["Tim Koornstra"]
-description = "Traverse your repo, interactively select files and directories, and yank a structured code snippet summary to your clipboard."
+description = "Interactively traverse your repository, select files/directories, and quickly prepare structured snippets for LLM interactions."
 license = "GPL-3.0-or-later"
-repository = "https://github.com/TimKoornstra/repoyanker"
+repository = "https://github.com/TimKoornstra/repoyank"
 readme = "README.md"
-keywords = ["clipboard", "files", "snippets", "repo", "cli"]
-categories = ["command-line-utilities", "development-tools"]
+keywords = ["clipboard", "code-snippets", "llm", "repository", "cli", "productivity"]
+categories = ["command-line-utilities", "development-tools", "text-processing"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 ignore = "0.4"
 walkdir = "2.4"
 arboard = { version = "3.5.0", features = ["wayland-data-control"] }
-crossterm = "0.27.0"
-ratatui = { version = "0.26.3", features = ["crossterm"] }
+crossterm = "0.29.0"
+ratatui = { version = "0.29.0", features = ["crossterm"] }
 anyhow = "1.0"
-
