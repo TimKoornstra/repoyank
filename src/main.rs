@@ -2,15 +2,13 @@ mod cli;
 mod clipboard;
 mod file_scanner;
 mod tree_builder;
+mod tui;
 mod utils;
 
 use anyhow::Result;
 use clap::Parser;
-use dialoguer::{MultiSelect, theme::ColorfulTheme};
-use ignore::WalkBuilder as IgnoreWalkBuilder;
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsStr,
     fs,
     path::PathBuf,
 };
@@ -32,146 +30,129 @@ fn main() -> Result<()> {
 
     for (path, is_dir) in &initial_scan_results {
         if !*is_dir {
-            // It's a file that passed type filters
             paths_for_selection_prompt_set.insert(path.clone());
-
             let mut current_ancestor = path.parent();
             while let Some(ancestor_path) = current_ancestor {
-                // Only consider ancestors within or at the root level
                 if ancestor_path.starts_with(&cli_args.root) || ancestor_path == &cli_args.root {
                     paths_for_selection_prompt_set.insert(ancestor_path.to_path_buf());
                     if ancestor_path == &cli_args.root {
-                        break; // Reached the root
+                        break;
                     }
                     current_ancestor = ancestor_path.parent();
                 } else {
-                    break; // Ancestor is outside the root, stop.
+                    break;
                 }
             }
+        } else if path == &cli_args.root {
+            paths_for_selection_prompt_set.insert(path.clone());
+        }
+    }
+    if initial_scan_results
+        .iter()
+        .any(|(p, _)| p == &cli_args.root)
+    {
+        if !paths_for_selection_prompt_set.contains(&cli_args.root) && cli_args.root.is_dir() {
+            // Ensure root dir is in if it exists
+            paths_for_selection_prompt_set.insert(cli_args.root.clone());
         }
     }
 
     let initial_scan_map: HashMap<PathBuf, bool> = initial_scan_results.iter().cloned().collect();
-    let mut selectable_items: Vec<(PathBuf, bool)> = Vec::new();
+    let mut selectable_items_for_tui: Vec<(PathBuf, bool)> = paths_for_selection_prompt_set
+        .into_iter()
+        .filter_map(|path| initial_scan_map.get(&path).map(|is_dir| (path, *is_dir)))
+        .collect();
 
-    for path in paths_for_selection_prompt_set {
-        if let Some(is_dir) = initial_scan_map.get(&path) {
-            selectable_items.push((path, *is_dir));
-        }
+    // If root was not in initial_scan_map (e.g. empty dir scan returned nothing but root path)
+    // ensure it's added if it exists and is a directory.
+    if !selectable_items_for_tui
+        .iter()
+        .any(|(p, _)| p == &cli_args.root)
+        && cli_args.root.exists()
+        && cli_args.root.is_dir()
+    {
+        selectable_items_for_tui.push((cli_args.root.clone(), true));
     }
 
-    selectable_items.sort_by(|(a, _), (b, _)| a.cmp(b));
+    selectable_items_for_tui.sort_by(|(a, _), (b, _)| a.cmp(b));
+    selectable_items_for_tui.dedup_by(|(a, _), (b, _)| a == b);
 
-    if selectable_items.is_empty() {
-        println!("No matching files or non-empty directories found to select from.");
+    if selectable_items_for_tui.is_empty() {
+        println!("No matching files or directories found to select from.");
         return Ok(());
     }
 
-    // 2. Build a tree for the selection prompt using the filtered list
-    let display_labels = tree_builder::build_tree_labels(&selectable_items, &cli_args.root);
+    let display_labels = tree_builder::build_tree_labels(&selectable_items_for_tui, &cli_args.root);
 
-    // 3. Prompt the user for selections
-    let selections_indices = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select files or directories (Space to toggle, Enter to confirm)")
-        .items(&display_labels)
-        .interact()?;
-
-    if selections_indices.is_empty() {
-        println!("No items selected. Exiting.");
-        return Ok(());
-    }
-
-    // 4. Determine the actual files to include based on selections
-    let mut picked_files_content: Vec<PathBuf> = Vec::new();
-    for &selected_idx in &selections_indices {
-        let (selected_path, is_dir) = &selectable_items[selected_idx];
-        if *is_dir {
-            let mut dir_walker = IgnoreWalkBuilder::new(selected_path);
-            if cli_args.include_ignored {
-                dir_walker.git_ignore(false).ignore(false);
+    // 3. Prompt the user for selections using the new TUI
+    let tui_result_items =
+        match tui::run_tui(&selectable_items_for_tui, &display_labels, &cli_args.root)? {
+            Some(items) => items,
+            _ => {
+                println!("Selection cancelled. Exiting.");
+                return Ok(());
             }
-            for entry_result in dir_walker.build() {
-                if let Ok(entry) = entry_result {
-                    if entry.file_type().map_or(false, |ft| ft.is_file()) {
-                        let path = entry.into_path();
-                        if !cli_args.types.is_empty() {
-                            let keep = cli_args
-                                .types
-                                .iter()
-                                .any(|ext_str| path.extension() == Some(OsStr::new(ext_str)));
-                            if keep {
-                                picked_files_content.push(path);
-                            }
-                        } else {
-                            picked_files_content.push(path);
-                        }
-                    }
-                }
-            }
-        } else {
-            picked_files_content.push(selected_path.clone());
-        }
-    }
+        };
+
+    // 4. Determine the actual files to include based on TUI selections
+    let mut picked_files_content: Vec<PathBuf> = tui_result_items
+        .iter()
+        .filter(|item| !item.is_dir && item.state == tui::SelectionState::FullySelected)
+        .map(|item| item.path.clone())
+        .collect();
+
     picked_files_content.sort();
     picked_files_content.dedup();
 
     if picked_files_content.is_empty() {
-        println!("No actual files to copy after expanding selections. Exiting.");
+        println!("No files selected to copy. Exiting.");
         return Ok(());
     }
 
     // 5. Construct the list of nodes for the output tree display
-    let mut final_tree_nodes: Vec<(PathBuf, bool)> = Vec::new();
-    // Add root node if it exists and was scanned. Its is_dir status from initial_scan_map.
-    if let Some(root_is_dir) = initial_scan_map.get(&cli_args.root) {
-        final_tree_nodes.push((cli_args.root.clone(), *root_is_dir));
-    } else if cli_args.root.exists() {
-        // Fallback if root wasn't in scan map for some reason (e.g. not a dir, or scan issue)
-        final_tree_nodes.push((cli_args.root.clone(), cli_args.root.is_dir()));
+    let mut final_tree_node_paths_set = HashSet::new();
+    // Always include the root in the tree display if it exists.
+    // is_dir status from initial_scan_map or direct check.
+    if cli_args.root.exists() {
+        final_tree_node_paths_set.insert(cli_args.root.clone());
     }
 
-    for (path, is_dir) in &initial_scan_results {
-        // Iterate over all initially discovered items
-        let directly_selected = selections_indices
-            .iter()
-            .any(|&idx| selectable_items[idx].0 == *path);
-
-        let descendant_of_selected_dir = selections_indices.iter().any(|&idx| {
-            let (sel_path, sel_is_dir) = &selectable_items[idx];
-            *sel_is_dir && path.starts_with(sel_path) && path != sel_path
-        });
-
-        if directly_selected || descendant_of_selected_dir {
-            if !final_tree_nodes.iter().any(|(p, _)| p == path) {
-                // Add if not already present
-                final_tree_nodes.push((path.clone(), *is_dir));
-            }
-            let mut current = path.clone();
-            while let Some(parent) = current.parent() {
-                if parent == cli_args.root && !final_tree_nodes.iter().any(|(p, _)| p == parent) {
-                    if let Some(root_item_is_dir) = initial_scan_map.get(&cli_args.root) {
-                        final_tree_nodes.push((cli_args.root.clone(), *root_item_is_dir));
+    for item in &tui_result_items {
+        // Include items that are fully or partially selected in the tree
+        if item.state == tui::SelectionState::FullySelected
+            || item.state == tui::SelectionState::PartiallySelected
+        {
+            final_tree_node_paths_set.insert(item.path.clone());
+            // Also include all ancestors of selected items up to the root
+            let mut current_ancestor = item.path.parent();
+            while let Some(ancestor_path) = current_ancestor {
+                if ancestor_path.starts_with(&cli_args.root) || ancestor_path == &cli_args.root {
+                    final_tree_node_paths_set.insert(ancestor_path.to_path_buf());
+                    if ancestor_path == &cli_args.root {
+                        break;
                     }
-                    break;
-                }
-                if parent.starts_with(&cli_args.root) && parent != &cli_args.root {
-                    if !final_tree_nodes.iter().any(|(p, _)| p == parent) {
-                        // Get is_dir status from initial_scan_map for accuracy
-                        let parent_is_dir = initial_scan_map
-                            .get(parent)
-                            .copied()
-                            .unwrap_or_else(|| parent.is_dir());
-                        final_tree_nodes.push((parent.to_path_buf(), parent_is_dir));
-                    }
+                    current_ancestor = ancestor_path.parent();
                 } else {
-                    break;
+                    break; // Ancestor is outside the root
                 }
-                current = parent.to_path_buf();
             }
         }
     }
+
+    let mut final_tree_nodes: Vec<(PathBuf, bool)> = final_tree_node_paths_set
+        .into_iter()
+        .map(|p| {
+            // Get is_dir status from initial scan, or check fs as fallback
+            let is_dir = initial_scan_map
+                .get(&p)
+                .copied()
+                .unwrap_or_else(|| p.is_dir());
+            (p, is_dir)
+        })
+        .collect();
+
     final_tree_nodes.sort_by(|(a, _), (b, _)| a.cmp(b));
-    final_tree_nodes.dedup_by(|(a, _), (b, _)| a == b);
+    // HashSet ensures deduplication
 
     // 6. Build the output tree
     let output_tree_labels = tree_builder::build_tree_labels(&final_tree_nodes, &cli_args.root);
@@ -184,6 +165,7 @@ fn main() -> Result<()> {
 
     // 7. Append file contents
     for file_path in &picked_files_content {
+        // This now uses the correctly filtered list
         let relative_path = file_path.strip_prefix(&cli_args.root).unwrap_or(file_path);
         match fs::read_to_string(file_path) {
             Ok(contents) => {
