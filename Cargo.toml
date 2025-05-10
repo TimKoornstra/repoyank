@@ -7,7 +7,7 @@ description = "Interactively traverse your repository, select files/directories,
 license = "GPL-3.0-or-later"
 repository = "https://github.com/TimKoornstra/repoyank"
 readme = "README.md"
-keywords = ["clipboard", "code-snippets", "llm", "repository", "cli", "productivity"]
+keywords = ["clipboard", "code-snippets", "llm", "repository", "cli"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 
 [dependencies]
