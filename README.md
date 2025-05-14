@@ -39,7 +39,7 @@ There are three easy ways to install `repoyank`:
 3. **Latest development version (from GitHub)**
 
    ```bash
-   cargo install --git https://github.com/TimKoornstra/repoyanker.git --branch main
+   cargo install --git https://github.com/TimKoornstra/repoyank.git --branch main
    ```
 
 ## 🛠 Usage
@@ -100,14 +100,14 @@ And provide you a helpful confirmation:
 Clone and run locally:
 
 ```bash
-git clone https://github.com/TimKoornstra/repoyanker.git
-cd repoyanker
+git clone https://github.com/TimKoornstra/repoyank.git
+cd repoyank
 cargo run -- --types rs,md
 ```
 
 ## 🤝 Contributing
 
-This is my first Rust project! Contributions, suggestions, and improvements are very welcome. Feel free to open issues or pull requests at [GitHub](https://github.com/TimKoornstra/repoyanker).
+This is my first Rust project! Contributions, suggestions, and improvements are very welcome. Feel free to open issues or pull requests at [GitHub](https://github.com/TimKoornstra/repoyank).
 
 ## 📄 License
 
