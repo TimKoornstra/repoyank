@@ -15,6 +15,7 @@
 - **Structured Clipboard Output:** Provides well-formatted snippets with clear file separation.
 - **Customizable File Filtering:** Easily include or exclude specific file types.
 - **Pre-selection with Glob Patterns:** Quickly select files matching patterns before interactive selection.
+- **Headless Mode:** Directly output selected files based on glob patterns without launching the TUI.
 - **Clipboard Integration:** Works smoothly across Linux (Wayland/X11), macOS, and Windows via `arboard`.
 - **Git-aware:** Optional inclusion of files normally ignored by `.gitignore`.
 
