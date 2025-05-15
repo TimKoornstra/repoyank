@@ -192,6 +192,63 @@ impl TuiApp {
         update_all_parent_states_from_child_vec(&mut self.items, item_idx);
     }
 
+    fn select_all_visible_items(&mut self) {
+        let visible_indices = self.get_visible_item_indices();
+        for &item_idx in &visible_indices {
+            if !self.items[item_idx].is_dir {
+                // Only select files
+                // Apply FullySelected state directly to the file
+                apply_state_and_propagate_down_vec(
+                    &mut self.items,
+                    item_idx,
+                    SelectionState::FullySelected,
+                );
+                // Then update its parents
+                update_all_parent_states_from_child_vec(&mut self.items, item_idx);
+            }
+        }
+    }
+
+    fn deselect_all_visible_items(&mut self) {
+        let visible_indices = self.get_visible_item_indices();
+        for &item_idx in &visible_indices {
+            // Apply NotSelected state and propagate down (will unselect children if it's a dir)
+            apply_state_and_propagate_down_vec(
+                &mut self.items,
+                item_idx,
+                SelectionState::NotSelected,
+            );
+            // Then update its parents
+            update_all_parent_states_from_child_vec(&mut self.items, item_idx);
+        }
+    }
+
+    fn expand_all_directories(&mut self) {
+        for item in self.items.iter_mut() {
+            if item.is_dir {
+                item.is_expanded = true;
+            }
+        }
+        self.ensure_selection_is_visible(); // Selection might have become hidden
+    }
+
+    fn collapse_all_directories(&mut self) {
+        let root_path_of_tui = self.items.first().map(|item| item.path.clone());
+
+        for item in self.items.iter_mut() {
+            if item.is_dir {
+                // Don't collapse the root item if it's the only thing visible or if it's explicitly the root
+                // A simple heuristic: don't collapse if it has no parent (i.e., it's a root-level item in the TUI list)
+                if item.parent_index.is_some() || Some(&item.path) != root_path_of_tui.as_ref() {
+                    item.is_expanded = false;
+                } else {
+                    item.is_expanded = true; // Ensure root-level items remain expanded
+                }
+            }
+        }
+        self.ensure_selection_is_visible();
+    }
+
     fn is_item_visible(&self, item_idx: usize) -> bool {
         let item = &self.items[item_idx];
         match item.parent_index {
@@ -344,12 +401,11 @@ fn restore_terminal(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<
 }
 
 fn handle_events(app: &mut TuiApp) -> Result<()> {
-    // Poll for an event with a timeout.
     if event::poll(Duration::from_millis(100))? {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                // Process only key presses
-                match key.code {
+        if let Event::Key(key_event) = event::read()? {
+            if key_event.kind == KeyEventKind::Press {
+                // Handle primary character key presses (no complex modifiers expected for these actions)
+                match key_event.code {
                     KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
                     KeyCode::Char('y') => {
                         app.confirmed = true;
@@ -361,6 +417,23 @@ fn handle_events(app: &mut TuiApp) -> Result<()> {
                     KeyCode::Char('o') | KeyCode::Tab => {
                         app.toggle_expansion_and_adjust_selection()
                     }
+
+                    KeyCode::Char('*') => {
+                        // Shift+8 on US QWERTY for Expand All
+                        app.expand_all_directories();
+                    }
+                    KeyCode::Char('-') => {
+                        // Hyphen/Minus for Collapse All
+                        app.collapse_all_directories();
+                    }
+                    KeyCode::Char('a') => {
+                        // 'a' for Select All Visible Files
+                        app.select_all_visible_items();
+                    }
+                    KeyCode::Char('d') => {
+                        // Ensure no modifiers for this action
+                        app.deselect_all_visible_items();
+                    }
                     _ => {}
                 }
             }
@@ -370,17 +443,18 @@ fn handle_events(app: &mut TuiApp) -> Result<()> {
 }
 
 fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
+    let top_block_height = 4;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([
-            Constraint::Length(3), // Title/Help
-            Constraint::Min(0),    // List
-        ])
+        .constraints([Constraint::Length(top_block_height), Constraint::Min(0)])
         .split(frame.area());
 
-    let help_text = "Arrows/jk: Navigate | Space/Enter: Toggle Select | Tab/o: Toggle Fold | y: Confirm | q/Esc: Quit";
-    let help_paragraph = Paragraph::new(help_text).block(
+    let help_text_lines = vec![
+        Line::from("Arrows/jk: Nav | Space/Enter: Sel | Tab/o: Fold | y: Confirm | q/Esc: Quit"),
+        Line::from("a: Select All Visible | d: Deselect All | *: Expand All | -: Collapse All"),
+    ];
+    let help_paragraph = Paragraph::new(help_text_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .title("Repoyank Interactive Selection"),
