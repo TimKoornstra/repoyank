@@ -144,10 +144,15 @@ File: README.md
 ...
 ```
 
-And `repoyank` will provide a helpful confirmation:
+And `repoyank` will provide a helpful confirmation on your console, including the tree structure that was copied:
 
 ```
-✅ Copied 2 files (≈ 150 tokens) to the clipboard.
+./
+├─ src/
+│  └─ main.rs
+└─ README.md
+
+✅ Copied 2 files (≈ 150 tokens) from the displayed tree to the clipboard.
 ```
 
 ## 💻 Development
