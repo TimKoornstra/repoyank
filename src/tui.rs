@@ -6,7 +6,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use std::{
     collections::HashMap,
@@ -32,6 +32,12 @@ pub struct SelectableItem {
     // For propagating selections:
     pub children_indices: Vec<usize>,
     pub parent_index: Option<usize>,
+}
+
+#[derive(PartialEq, Eq)]
+enum AppMode {
+    Normal,
+    Filtering,
 }
 
 // Helper function to apply state and propagate down for pre-selection
@@ -121,6 +127,9 @@ pub struct TuiApp {
     scroll_offset: usize,
     quit: bool,
     confirmed: bool,
+    mode: AppMode,
+    filter_input: String,
+    filter_cursor_pos: usize,
 }
 
 impl TuiApp {
@@ -131,6 +140,9 @@ impl TuiApp {
             scroll_offset: 0,
             quit: false,
             confirmed: false,
+            mode: AppMode::Normal,
+            filter_input: String::new(),
+            filter_cursor_pos: 0,
         }
     }
 
@@ -262,12 +274,135 @@ impl TuiApp {
 
     fn get_visible_item_indices(&self) -> Vec<usize> {
         let mut visible_indices = Vec::new();
+        let filter_active = !self.filter_input.is_empty();
+        let lower_filter = self.filter_input.to_lowercase();
+
         for i in 0..self.items.len() {
-            if self.is_item_visible(i) {
-                visible_indices.push(i);
+            if self.is_item_visible_recursive(i) {
+                // Check recursive visibility first
+                if filter_active {
+                    // If filtering, item must match OR be an ancestor of a matched item
+                    if self.item_matches_filter_or_has_matching_descendant(i, &lower_filter) {
+                        visible_indices.push(i);
+                    }
+                } else {
+                    visible_indices.push(i);
+                }
             }
         }
         visible_indices
+    }
+
+    fn is_item_visible_recursive(&self, item_idx: usize) -> bool {
+        if item_idx >= self.items.len() {
+            return false;
+        }
+        let item = &self.items[item_idx];
+        match item.parent_index {
+            None => true, // Root items are always visible (in terms of hierarchy)
+            Some(parent_idx) => {
+                if parent_idx >= self.items.len() {
+                    return false;
+                } // Should not happen
+                self.items[parent_idx].is_expanded && self.is_item_visible_recursive(parent_idx)
+            }
+        }
+    }
+
+    // Helper to check if an item itself matches or any of its descendants match
+    fn item_matches_filter_or_has_matching_descendant(
+        &self,
+        item_idx: usize,
+        lower_filter: &str,
+    ) -> bool {
+        if item_idx >= self.items.len() {
+            return false;
+        }
+        let item = &self.items[item_idx];
+
+        // Check if current item matches
+        // Using display_text which includes the tree prefix. Alternatively, match on path.
+        if item.display_text.to_lowercase().contains(lower_filter) {
+            return true;
+        }
+
+        // If it's a directory, check its children recursively
+        if item.is_dir {
+            for &child_idx in &item.children_indices {
+                if self.item_matches_filter_or_has_matching_descendant(child_idx, lower_filter) {
+                    return true; // A descendant matches
+                }
+            }
+        }
+        false // No match for this item or its descendants
+    }
+
+    fn ensure_selection_is_valid_after_filter(&mut self) {
+        let visible_indices = self.get_visible_item_indices();
+        if visible_indices.is_empty() {
+            // No items match the filter. The list will just appear empty.
+            return;
+        }
+
+        if !visible_indices.contains(&self.current_selection_idx) {
+            // Current selection is not in the filtered list, move to the first visible.
+            self.current_selection_idx = *visible_indices.first().unwrap_or(&0);
+        }
+        self.ensure_selection_is_visible_in_viewport();
+    }
+
+    fn ensure_selection_is_visible_in_viewport(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        let visible_item_indices = self.get_visible_item_indices();
+        if visible_item_indices.is_empty() {
+            return;
+        }
+
+        // If current_selection_idx is NOT EVEN IN THE HIERARCHICALLY EXPANDED AND FILTERED LIST,
+        // we must reset it. This is partly handled by ensure_selection_is_valid_after_filter.
+        // This function then focuses on scrolling.
+
+        // The rest of this function is about scrolling the viewport
+        // based on current_selection_idx relative to the visible_item_indices.
+        // The logic here for adjusting scroll_offset remains largely the same.
+        // The key is that `visible_item_indices` is now filter-aware.
+
+        let list_height = 20; // Placeholder, get from frame in ui_frame
+        // This value needs to be passed or calculated based on frame size.
+        // For now, using a constant for internal logic.
+
+        let current_selected_item_in_visible_list_idx_opt = visible_item_indices
+            .iter()
+            .position(|&idx| idx == self.current_selection_idx);
+
+        if let Some(selected_idx_in_visible_list) = current_selected_item_in_visible_list_idx_opt {
+            if selected_idx_in_visible_list < self.scroll_offset {
+                self.scroll_offset = selected_idx_in_visible_list;
+            } else if selected_idx_in_visible_list >= self.scroll_offset + list_height {
+                self.scroll_offset = selected_idx_in_visible_list - list_height + 1;
+            }
+        } else if !visible_item_indices.is_empty() {
+            // Selection is not in visible list (e.g. due to filter change)
+            self.current_selection_idx = *visible_item_indices.first().unwrap_or(&0);
+            self.scroll_offset = 0;
+        }
+
+        let num_visible_items = visible_item_indices.len();
+        if num_visible_items == 0 {
+            self.scroll_offset = 0;
+        } else if num_visible_items < list_height {
+            self.scroll_offset = 0;
+        } else if self.scroll_offset > num_visible_items.saturating_sub(list_height) {
+            self.scroll_offset = num_visible_items.saturating_sub(list_height);
+        }
+        self.scroll_offset = self.scroll_offset.max(0);
+        if num_visible_items > 0 {
+            // Avoid panic on num_visible_items.saturating_sub(1) if empty
+            self.scroll_offset = self.scroll_offset.min(num_visible_items.saturating_sub(1));
+        }
     }
 
     fn toggle_expansion_and_adjust_selection(&mut self) {
@@ -401,11 +536,56 @@ fn restore_terminal(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<
 }
 
 fn handle_events(app: &mut TuiApp) -> Result<()> {
-    if event::poll(Duration::from_millis(100))? {
+    if event::poll(Duration::from_millis(50))? {
         if let Event::Key(key_event) = event::read()? {
             if key_event.kind == KeyEventKind::Press {
+                if app.mode == AppMode::Filtering {
+                    match key_event.code {
+                        KeyCode::Enter => {
+                            app.mode = AppMode::Normal;
+                            // Filter is applied, ensure selection is valid
+                            app.ensure_selection_is_valid_after_filter();
+                        }
+                        KeyCode::Esc => {
+                            app.mode = AppMode::Normal;
+                            app.filter_input.clear();
+                            app.filter_cursor_pos = 0;
+                            app.ensure_selection_is_valid_after_filter();
+                        }
+                        KeyCode::Char(c) => {
+                            // Insert char at cursor position
+                            app.filter_input.insert(app.filter_cursor_pos, c);
+                            app.filter_cursor_pos += 1;
+                            app.ensure_selection_is_valid_after_filter();
+                        }
+                        KeyCode::Backspace => {
+                            if app.filter_cursor_pos > 0 && !app.filter_input.is_empty() {
+                                app.filter_cursor_pos -= 1;
+                                app.filter_input.remove(app.filter_cursor_pos);
+                                app.ensure_selection_is_valid_after_filter();
+                            }
+                        }
+                        KeyCode::Left => {
+                            if app.filter_cursor_pos > 0 {
+                                app.filter_cursor_pos -= 1;
+                            }
+                        }
+                        KeyCode::Right => {
+                            if app.filter_cursor_pos < app.filter_input.len() {
+                                app.filter_cursor_pos += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    return Ok(());
+                }
+
                 // Handle primary character key presses (no complex modifiers expected for these actions)
                 match key_event.code {
+                    KeyCode::Char('/') => {
+                        // Enter Filtering mode
+                        app.mode = AppMode::Filtering;
+                    }
                     KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
                     KeyCode::Char('y') => {
                         app.confirmed = true;
@@ -443,29 +623,77 @@ fn handle_events(app: &mut TuiApp) -> Result<()> {
 }
 
 fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
-    let top_block_height = 4;
-    let layout = Layout::default()
+    let help_lines = 2;
+    let filter_input_height = if app.mode == AppMode::Filtering { 3 } else { 0 }; // Block with borders
+    let top_block_height = (help_lines + 2) + filter_input_height; // +2 for help block borders
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Length(top_block_height), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(top_block_height), // Combined help and filter
+            Constraint::Min(0),                   // List
+        ])
         .split(frame.area());
 
-    let help_text_lines = vec![
+    // Split the top area for help and filter
+    let top_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if app.mode == AppMode::Filtering {
+            vec![
+                Constraint::Length(help_lines + 2),
+                Constraint::Length(filter_input_height),
+            ]
+        } else {
+            vec![Constraint::Length(help_lines + 2)]
+        })
+        .split(chunks[0]);
+
+    // Render Help Text
+    let help_text_lines_content = vec![
         Line::from("Arrows/jk: Nav | Space/Enter: Sel | Tab/o: Fold | y: Confirm | q/Esc: Quit"),
-        Line::from("a: Select All Visible | d: Deselect All | *: Expand All | -: Collapse All"),
+        Line::from("a: Sel All Vis | d: Desel All | *: Expand All | -: Collapse All | /: Filter"),
     ];
-    let help_paragraph = Paragraph::new(help_text_lines).block(
+    let help_paragraph = Paragraph::new(help_text_lines_content).block(
         Block::default()
             .borders(Borders::ALL)
             .title("Repoyank Interactive Selection"),
     );
-    frame.render_widget(help_paragraph, layout[0]);
+    frame.render_widget(help_paragraph, top_chunks[0]);
 
-    app.ensure_selection_is_visible();
-    let visible_item_indices = app.get_visible_item_indices();
+    // Render Filter Input if in Filtering mode
+    if app.mode == AppMode::Filtering {
+        let input_text = format!("/{}", app.filter_input);
+        let filter_paragraph = Paragraph::new(input_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Filter (Esc to cancel, Enter to apply)"),
+            )
+            .wrap(Wrap { trim: false }); // Show overflowing text
+        frame.render_widget(filter_paragraph, top_chunks[1]);
+        // Show cursor in filter input
+        frame.set_cursor_position((
+            top_chunks[1].x + 1 + app.filter_cursor_pos as u16 + 1, // +1 for border, +1 for '/'
+            top_chunks[1].y + 1,                                    // +1 for border
+        ));
+    } else {
+    }
+
+    // --- List Rendering ---
+    // Ensure selection is valid before getting visible items for rendering
+    // This handles cases where filter changes and selection might become invalid.
+    // It's better to call ensure_selection_is_valid_after_filter() in handle_events after filter changes.
+    // Here, we mostly focus on scrolling for the current valid selection.
+    app.ensure_selection_is_visible_in_viewport(); // This now uses a placeholder for list_height
+
+    let visible_item_indices = app.get_visible_item_indices(); // This is now filter-aware
     let num_visible_items = visible_item_indices.len();
-    let list_height = layout[1].height.saturating_sub(2) as usize;
+    let list_area = chunks[1]; // Use the correct chunk for the list
+    let list_height_for_scroll_calc = list_area.height.saturating_sub(2) as usize; // Actual list height
 
+    // This logic is now partly duplicated in ensure_selection_is_visible_in_viewport. Consolidate if possible.
+    // For now, let's assume ensure_selection_is_visible_in_viewport is called with correct list_height or TuiApp stores it.
+    // Simplified scroll adjustment (assuming ensure_selection_is_visible_in_viewport has a similar logic)
     let current_selected_item_in_visible_list_idx_opt = visible_item_indices
         .iter()
         .position(|&idx| idx == app.current_selection_idx);
@@ -473,30 +701,19 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
     if let Some(selected_idx_in_visible_list) = current_selected_item_in_visible_list_idx_opt {
         if selected_idx_in_visible_list < app.scroll_offset {
             app.scroll_offset = selected_idx_in_visible_list;
-        } else if selected_idx_in_visible_list >= app.scroll_offset + list_height {
-            app.scroll_offset = selected_idx_in_visible_list - list_height + 1;
+        } else if selected_idx_in_visible_list >= app.scroll_offset + list_height_for_scroll_calc {
+            app.scroll_offset = selected_idx_in_visible_list - list_height_for_scroll_calc + 1;
         }
-    } else if num_visible_items > 0 {
-        app.scroll_offset = 0;
     }
 
-    if num_visible_items == 0 {
-        app.scroll_offset = 0;
-    } else if num_visible_items < list_height {
-        app.scroll_offset = 0;
-    } else if app.scroll_offset > num_visible_items.saturating_sub(list_height) {
-        app.scroll_offset = num_visible_items.saturating_sub(list_height);
-    }
-    app.scroll_offset = app.scroll_offset.max(0);
-    if num_visible_items > 0 {
-        app.scroll_offset = app.scroll_offset.min(num_visible_items.saturating_sub(1));
-    }
-
-    let visible_indices_to_render_slice = visible_item_indices
-        .get(app.scroll_offset..(app.scroll_offset + list_height).min(num_visible_items))
+    let list_items_to_render_indices = visible_item_indices
+        .get(
+            app.scroll_offset
+                ..(app.scroll_offset + list_height_for_scroll_calc).min(num_visible_items),
+        )
         .unwrap_or(&[]);
 
-    let list_items: Vec<ListItem> = visible_indices_to_render_slice
+    let list_items: Vec<ListItem> = list_items_to_render_indices
         .iter()
         .map(|&item_actual_idx| {
             let item = &app.items[item_actual_idx];
@@ -505,15 +722,11 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
                 SelectionState::PartiallySelected => "[-] ",
                 SelectionState::FullySelected => "[x] ",
             };
-
             let expansion_prefix = if item.is_dir {
                 if item.is_expanded { "[-] " } else { "[+] " }
             } else {
                 "    "
             };
-
-            // item.display_text contains the tree structure (e.g., "├─ dirname/")
-            // The full line is now: [Expansion] [Selection] TreeLabel
             let full_line = format!(
                 "{}{}{}",
                 expansion_prefix, selection_prefix, item.display_text
@@ -523,11 +736,14 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
         .collect();
 
     let list_widget = List::new(list_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Select files/directories",)),
-        )
+        .block(Block::default().borders(Borders::ALL).title(
+            if !app.filter_input.is_empty() && app.mode == AppMode::Normal {
+                // Show filter in title if active and normal mode
+                format!("Files (Filter: '{}')", app.filter_input)
+            } else {
+                "Select files/directories".to_string()
+            },
+        ))
         .highlight_style(
             Style::default()
                 .add_modifier(Modifier::BOLD)
@@ -539,11 +755,11 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
     let mut list_state_for_view = ratatui::widgets::ListState::default();
     if let Some(selected_idx_in_visible_list) = current_selected_item_in_visible_list_idx_opt {
         if selected_idx_in_visible_list >= app.scroll_offset
-            && selected_idx_in_visible_list < app.scroll_offset + list_height
+            && selected_idx_in_visible_list < app.scroll_offset + list_height_for_scroll_calc
         {
             list_state_for_view.select(Some(selected_idx_in_visible_list - app.scroll_offset));
         }
     }
 
-    frame.render_stateful_widget(list_widget, layout[1], &mut list_state_for_view);
+    frame.render_stateful_widget(list_widget, list_area, &mut list_state_for_view);
 }
