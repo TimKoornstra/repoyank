@@ -7,6 +7,7 @@ mod utils;
 
 use anyhow::Result;
 use clap::Parser;
+use glob::Pattern;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -84,9 +85,71 @@ fn main() -> Result<()> {
 
     let display_labels = tree_builder::build_tree_labels(&selectable_items_for_tui, &cli_args.root);
 
-    // 3. Prompt the user for selections using the new TUI
+    // Prepare TUI items (Vec<SelectableItem>)
+    let mut prepared_tui_items =
+        tui::prepare_selectable_items(&selectable_items_for_tui, &display_labels, &cli_args.root);
+
+    // Apply pre-selections if patterns are provided
+    if !cli_args.preselect.is_empty() {
+        let glob_patterns: Vec<Pattern> = cli_args
+            .preselect
+            .iter()
+            .filter_map(|s| match Pattern::new(s) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("⚠️  Warning: Invalid preselect pattern '{}': {}", s, e);
+                    None
+                }
+            })
+            .collect();
+
+        if !glob_patterns.is_empty() {
+            let mut matched_item_indices = Vec::new();
+            for (idx, item) in prepared_tui_items.iter().enumerate() {
+                if !item.is_dir {
+                    // Only preselect files
+                    // Match against path relative to cli_args.root
+                    if let Ok(relative_path) = item.path.strip_prefix(&cli_args.root) {
+                        // Handle case where root itself is a file, making relative_path empty
+                        let path_to_match = if relative_path.as_os_str().is_empty() {
+                            cli_args
+                                .root
+                                .file_name()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| relative_path.to_path_buf())
+                        } else {
+                            relative_path.to_path_buf()
+                        };
+
+                        for pattern in &glob_patterns {
+                            if pattern.matches_path(&path_to_match) {
+                                matched_item_indices.push(idx);
+                                break; // Matched one pattern, no need to check others for this file
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Apply selections to matched files
+            for &item_idx in &matched_item_indices {
+                tui::apply_state_and_propagate_down_vec(
+                    &mut prepared_tui_items,
+                    item_idx,
+                    tui::SelectionState::FullySelected,
+                );
+            }
+            // Update parent states for all initially matched files
+            // This ensures parent directories correctly reflect partial/full selections
+            for &item_idx in &matched_item_indices {
+                tui::update_all_parent_states_from_child_vec(&mut prepared_tui_items, item_idx);
+            }
+        }
+    }
+
+    // 3. Prompt the user for selections using the TUI with potentially pre-selected items
     let tui_result_items =
-        match tui::run_tui(&selectable_items_for_tui, &display_labels, &cli_args.root)? {
+        match tui::run_tui_with_prepared_items(prepared_tui_items, &cli_args.root)? {
             Some(items) => items,
             _ => {
                 println!("Selection cancelled. Exiting.");

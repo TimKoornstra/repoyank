@@ -34,6 +34,87 @@ pub struct SelectableItem {
     pub parent_index: Option<usize>,
 }
 
+// Helper function to apply state and propagate down for pre-selection
+pub fn apply_state_and_propagate_down_vec(
+    items: &mut [SelectableItem],
+    item_idx: usize,
+    new_state: SelectionState,
+) {
+    if item_idx >= items.len() {
+        return;
+    }
+
+    let actual_new_state =
+        if !items[item_idx].is_dir && new_state == SelectionState::PartiallySelected {
+            // Files cannot be PartiallySelected from a direct "select all children" type operation
+            SelectionState::FullySelected
+        } else {
+            new_state
+        };
+
+    items[item_idx].state = actual_new_state;
+
+    if items[item_idx].is_dir && actual_new_state != SelectionState::PartiallySelected {
+        let children_indices = items[item_idx].children_indices.clone();
+        for child_idx in children_indices {
+            apply_state_and_propagate_down_vec(items, child_idx, actual_new_state);
+        }
+    }
+}
+
+// Helper function to recalculate parent state for pre-selection
+fn recalculate_parent_state_vec(items: &mut [SelectableItem], parent_idx: usize) {
+    if parent_idx >= items.len() || !items[parent_idx].is_dir {
+        return;
+    }
+
+    let children_indices = items[parent_idx].children_indices.clone();
+    if children_indices.is_empty() {
+        // If a dir has no selectable children its state does not change based on children
+        return;
+    }
+
+    let mut num_fully_selected_children = 0;
+    let mut num_partially_selected_children = 0;
+
+    for &child_idx in &children_indices {
+        if child_idx >= items.len() {
+            continue;
+        }
+        match items[child_idx].state {
+            SelectionState::FullySelected => num_fully_selected_children += 1,
+            SelectionState::PartiallySelected => num_partially_selected_children += 1,
+            SelectionState::NotSelected => {}
+        }
+    }
+
+    let total_children = children_indices.len();
+    let new_parent_state = if num_fully_selected_children == total_children {
+        SelectionState::FullySelected
+    } else if num_fully_selected_children == 0 && num_partially_selected_children == 0 {
+        SelectionState::NotSelected
+    } else {
+        SelectionState::PartiallySelected
+    };
+
+    items[parent_idx].state = new_parent_state;
+}
+
+// Helper function to update all parent states from a child for pre-selection
+pub fn update_all_parent_states_from_child_vec(items: &mut [SelectableItem], child_idx: usize) {
+    if child_idx >= items.len() {
+        return;
+    }
+    let mut current_parent_idx_opt = items[child_idx].parent_index;
+    while let Some(parent_idx) = current_parent_idx_opt {
+        recalculate_parent_state_vec(items, parent_idx);
+        if parent_idx >= items.len() {
+            break;
+        }
+        current_parent_idx_opt = items[parent_idx].parent_index;
+    }
+}
+
 pub struct TuiApp {
     items: Vec<SelectableItem>,
     current_selection_idx: usize,
@@ -77,7 +158,6 @@ impl TuiApp {
         let new_idx_in_visible_list = match current_item_position_in_visible_list {
             Some(pos) => (pos as i32 + delta).rem_euclid(visible_indices.len() as i32) as usize,
             None => {
-                // Current selection is not visible (should be rare after ensure_selection_is_visible), select first/last
                 if delta > 0 || visible_indices.is_empty() {
                     0
                 } else {
@@ -89,7 +169,6 @@ impl TuiApp {
         if !visible_indices.is_empty() {
             self.current_selection_idx = visible_indices[new_idx_in_visible_list];
         } else if !self.items.is_empty() {
-            // Fallback: if no items are visible (e.g. root hidden), default to 0
             self.current_selection_idx = 0;
         }
     }
@@ -109,69 +188,8 @@ impl TuiApp {
             SelectionState::FullySelected => SelectionState::NotSelected,
         };
 
-        self.apply_state_and_propagate_down(item_idx, new_state_for_item);
-        self.update_all_parent_states_from_child(item_idx);
-    }
-
-    fn apply_state_and_propagate_down(&mut self, item_idx: usize, new_state: SelectionState) {
-        let actual_new_state =
-            if !self.items[item_idx].is_dir && new_state == SelectionState::PartiallySelected {
-                SelectionState::FullySelected // Files cannot be PartiallySelected
-            } else {
-                new_state
-            };
-
-        self.items[item_idx].state = actual_new_state;
-
-        if self.items[item_idx].is_dir && actual_new_state != SelectionState::PartiallySelected {
-            let children_indices = self.items[item_idx].children_indices.clone();
-            for child_idx in children_indices {
-                self.apply_state_and_propagate_down(child_idx, actual_new_state);
-            }
-        }
-    }
-
-    fn update_all_parent_states_from_child(&mut self, child_idx: usize) {
-        let mut current_parent_idx_opt = self.items[child_idx].parent_index;
-        while let Some(parent_idx) = current_parent_idx_opt {
-            self.recalculate_parent_state(parent_idx);
-            current_parent_idx_opt = self.items[parent_idx].parent_index;
-        }
-    }
-
-    fn recalculate_parent_state(&mut self, parent_idx: usize) {
-        if !self.items[parent_idx].is_dir {
-            return;
-        }
-
-        let children_indices = self.items[parent_idx].children_indices.clone();
-        if children_indices.is_empty() {
-            // If a dir has no selectable children, its state is only changed by direct interaction
-            // or propagation from its parent. This function does not change its state.
-            return;
-        }
-
-        let mut num_fully_selected_children = 0;
-        let mut num_partially_selected_children = 0;
-
-        for &child_idx in &children_indices {
-            match self.items[child_idx].state {
-                SelectionState::FullySelected => num_fully_selected_children += 1,
-                SelectionState::PartiallySelected => num_partially_selected_children += 1,
-                SelectionState::NotSelected => {}
-            }
-        }
-
-        let total_children = children_indices.len();
-        let new_parent_state = if num_fully_selected_children == total_children {
-            SelectionState::FullySelected
-        } else if num_fully_selected_children == 0 && num_partially_selected_children == 0 {
-            SelectionState::NotSelected
-        } else {
-            SelectionState::PartiallySelected
-        };
-
-        self.items[parent_idx].state = new_parent_state;
+        apply_state_and_propagate_down_vec(&mut self.items, item_idx, new_state_for_item);
+        update_all_parent_states_from_child_vec(&mut self.items, item_idx);
     }
 
     fn is_item_visible(&self, item_idx: usize) -> bool {
@@ -213,10 +231,9 @@ impl TuiApp {
         }
 
         if self.is_item_visible(self.current_selection_idx) {
-            return; // Already visible, nothing to do
+            return;
         }
 
-        // Current selection is hidden. Walk up its ancestors until a visible one is found.
         let mut candidate_idx = self.current_selection_idx;
         while let Some(parent_idx) = self.items[candidate_idx].parent_index {
             candidate_idx = parent_idx;
@@ -226,26 +243,21 @@ impl TuiApp {
             }
         }
 
-        // If loop finishes, candidate_idx is the root. If root is visible, select it.
         if self.is_item_visible(candidate_idx) {
-            // is_item_visible(root_idx) should be true
             self.current_selection_idx = candidate_idx;
             return;
         }
 
-        // Fallback: if no ancestor (including root) is visible (highly unlikely),
-        // try to select the first item from get_visible_item_indices().
         let visible_indices = self.get_visible_item_indices();
         if let Some(&first_visible_idx) = visible_indices.first() {
             self.current_selection_idx = first_visible_idx;
         } else if !self.items.is_empty() {
-            // Should not happen: items exist but none are visible. Default to 0.
             self.current_selection_idx = 0;
         }
     }
 }
 
-fn prepare_selectable_items(
+pub fn prepare_selectable_items(
     initial_items_paths_is_dir: &[(PathBuf, bool)],
     display_labels: &[String],
     root_path: &Path,
@@ -273,10 +285,7 @@ fn prepare_selectable_items(
     for i in 0..selectable_items.len() {
         let path = selectable_items[i].path.clone();
         if path != *root_path {
-            // Root item has no parent in this context
             if let Some(parent_pbuf) = path.parent() {
-                // Ensure parent_path is something that would be in path_to_idx_map
-                // (i.e., it's within root_path and was part of selectable_items)
                 if parent_pbuf.starts_with(root_path) || parent_pbuf == root_path {
                     if let Some(parent_idx) = path_to_idx_map.get(parent_pbuf) {
                         selectable_items[i].parent_index = Some(*parent_idx);
@@ -291,23 +300,11 @@ fn prepare_selectable_items(
     selectable_items
 }
 
-pub fn run_tui(
-    initial_items_paths_is_dir: &[(PathBuf, bool)],
-    display_labels: &[String],
-    root_path: &Path,
+pub fn run_tui_with_prepared_items(
+    prepared_items: Vec<SelectableItem>,
+    #[allow(unused_variables)] root_path: &Path,
 ) -> Result<Option<Vec<SelectableItem>>> {
-    if initial_items_paths_is_dir.is_empty() {
-        // No items were even presented to TUI, treat as if user selected nothing confirmable.
-        // Or, if we want to distinguish "nothing to select" from "cancelled empty list",
-        // this could return Ok(Some(Vec::new())) if we want main to handle it.
-        // For now, let's assume if it's empty, it's like cancelling an empty selection.
-        return Ok(None);
-    }
-
-    let prepared_items =
-        prepare_selectable_items(initial_items_paths_is_dir, display_labels, root_path);
     if prepared_items.is_empty() {
-        // Should ideally not happen if initial_items_paths_is_dir wasn't empty
         return Ok(None);
     }
     let mut app = TuiApp::new(prepared_items);
@@ -438,7 +435,7 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
             let expansion_prefix = if item.is_dir {
                 if item.is_expanded { "[-] " } else { "[+] " }
             } else {
-                "    " // 4 spaces for alignment with dir indicators like "[-] "
+                "    "
             };
 
             // item.display_text contains the tree structure (e.g., "├─ dirname/")

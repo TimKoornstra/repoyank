@@ -16,4 +16,10 @@ pub struct Cli {
     /// Include files ignored by .gitignore
     #[arg(long)]
     pub include_ignored: bool,
+
+    // Glob patterns to preselect files (e.g., "src/**/*.rs", "tests/test_*.py").
+    /// Paths are relative to the root directory.
+    /// Can be specified multiple times using --preselect <PATTERN_1> --preselect <PATTERN_2> ...
+    #[arg(long, value_name = "PATTERN")]
+    pub preselect: Vec<String>,
 }
