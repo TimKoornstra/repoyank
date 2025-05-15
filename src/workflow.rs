@@ -1,5 +1,3 @@
-// src/workflow.rs
-
 use crate::{cli, clipboard, file_scanner, tree_builder, tui, utils};
 use anyhow::Result;
 use glob::Pattern;
@@ -262,7 +260,7 @@ fn run_interactive_mode(
                 Ok(p) => Some(p),
                 Err(e) => {
                     eprintln!("⚠️ Warning: Invalid --select glob pattern '{}': {}", s, e);
-                    None
+                    std::process::exit(1);
                 }
             })
             .collect();
