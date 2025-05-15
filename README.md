@@ -14,6 +14,7 @@
 - **Recursive File Inclusion:** Automatically gathers nested files.
 - **Structured Clipboard Output:** Provides well-formatted snippets with clear file separation.
 - **Customizable File Filtering:** Easily include or exclude specific file types.
+- **Pre-selection with Glob Patterns:** Quickly select files matching patterns before interactive selection.
 - **Clipboard Integration:** Works smoothly across Linux (Wayland/X11), macOS, and Windows via `arboard`.
 - **Git-aware:** Optional inclusion of files normally ignored by `.gitignore`.
 
@@ -58,6 +59,7 @@ repoyank [OPTIONS] [DIR]
 | ------------------------- | -------------------------------------------------------- |
 | `--types <ext1,ext2,...>` | Filter by comma-separated file extensions (without dots) |
 | `--include-ignored`       | Include files ignored by `.gitignore`                    |
+| `--preselect <PATTERN>`   | Glob pattern to preselect files (e.g., "src/**/*.rs"). Can be specified multiple times.|
 | `-h`, `--help`            | Display help information                                 |
 | `-V`, `--version`         | Display version information                              |
 
@@ -67,6 +69,12 @@ Interactive selection tailored for Rust and Markdown files:
 
 ```bash
 repoyank --types rs,md
+```
+
+Or preselect all files under `src/` and all Python test files before opening the TUI:
+
+```bash
+repoyank --preselect "src/**" --preselect "tests/test_*.py"
 ```
 
 After selection, your clipboard will contain output like:
