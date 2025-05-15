@@ -7,15 +7,18 @@
 - **Privacy-first:** Keep your codebase secure by preparing snippets locally instead of uploading to external tools.
 - **LLM-friendly output:** Neatly formatted for direct copy-paste into GPT or other language models.
 - **Interactive Tree View:** Easily navigate your repository and precisely select files and directories.
+- **Powerful Pattern Matching:** Use shell-style globs to define the scope of your selection.
 
 ## 🎯 Features
 
-- **Interactive Selection:** Intuitive tree-view interface for selecting files or directories.
-- **Recursive File Inclusion:** Automatically gathers nested files.
+- **Flexible File Scoping:** Specify target files and directories using intuitive glob patterns.
+- **Interactive Selection:** Refine your selection with a tree-view interface.
+- **Recursive File Inclusion:** Automatically gathers nested files within selected directories.
 - **Structured Clipboard Output:** Provides well-formatted snippets with clear file separation.
-- **Customizable File Filtering:** Easily include or exclude specific file types.
-- **Pre-selection with Glob Patterns:** Quickly select files matching patterns before interactive selection.
-- **Headless Mode:** Directly output selected files based on glob patterns without launching the TUI.
+- **Customizable File Filtering:** Easily include specific file types by extension.
+- **TUI Pre-selection:** Highlight items matching glob patterns on TUI start-up.
+- **Direct Yanking (`--all`):** Skip the TUI and directly yank files matching patterns and filters.
+- **Dry Run Mode:** Preview what would be selected and copied without touching the clipboard.
 - **Clipboard Integration:** Works smoothly across Linux (Wayland/X11), macOS, and Windows via `arboard`.
 - **Git-aware:** Optional inclusion of files normally ignored by `.gitignore`.
 
@@ -47,45 +50,81 @@ There are three easy ways to install `repoyank`:
 ## 🛠 Usage
 
 ```bash
-repoyank [OPTIONS] [DIR]
+repoyank [OPTIONS] [PATTERN ...]
 ```
 
 ### Arguments
 
-* `DIR`: Root directory (default: current directory `.`)
+*   `[PATTERN ...]`
+    *   Zero or more shell-style globs (e.g., `src/**/*.rs`, `docs/*.md`, `path/to/specific_file.txt`).
+    *   Globs are resolved relative to the **scan root**.
+    *   **Scan Root:**
+        *   If the first `PATTERN` provided is an existing directory, it is used as the scan root.
+        *   Otherwise, the current working directory (`.`) is the scan root.
+    *   If no patterns are given, `repoyank` defaults to scanning all files (`**/*`) under the scan root.
 
 ### Options
 
-| Flag                      | Description                                              |
-| ------------------------- | -------------------------------------------------------- |
-| `--types <ext1,ext2,...>` | Filter by comma-separated file extensions (without dots) |
-| `--include-ignored`       | Include files ignored by `.gitignore`                    |
-| `--preselect <PATTERN>`   | Glob pattern to preselect files (e.g., "src/**/*.rs"). Can be specified multiple times.|
-| `--headless`              | Run in headless mode. Requires `--preselect`. Skips TUI. |
-| `-h`, `--help`            | Display help information                                 |
-| `-V`, `--version`         | Display version information                              |
+| Short | Long / value            | Purpose & Notes                                                                                                     |
+| :---- | :---------------------- | :------------------------------------------------------------------------------------------------------------------ |
+| `-a`  | `--all`                 | Skip the TUI entirely – yank everything selected by patterns and filters.                                           |
+| `-t`  | `--type <EXT[,EXT...]>` | Filter by comma-separated file extensions (e.g., `rs,md`; no dots). Applied *after* patterns.                        |
+| `-s`  | `--select <GLOB[,...]>` | Pre-select items in the TUI matching these globs. Globs are relative to the scan root. User can still change pick. |
+| `-i`  | `--include-ignored`     | Include files that are normally excluded by `.gitignore`.                                                             |
+| `-n`  | `--dry-run`             | Print the final tree and selection summary, but **don't** touch the clipboard.                                    |
+| `-h`  | `--help`                | Show help information.                                                                                              |
+| `-V`  | `--version`             | Show version information.                                                                                           |
 
-### Example
+*(Deprecated aliases like `--headless` and `--preselect` may still work for a limited time but will be removed in a future version.)*
 
-Interactive selection tailored for Rust and Markdown files:
+### Examples
 
-```bash
-repoyank --types rs,md
-```
+1.  **Browse the current directory and cherry-pick files:**
+    ```bash
+    repoyank
+    ```
 
-Preselect all files under `src/` and all Python test files before opening the TUI:
+2.  **Browse a specific subdirectory (`my_project/src`) and pick files:**
+    ```bash
+    repoyank my_project/src
+    ```
+    *(Here, `my_project/src` becomes the scan root, and the default pattern `**/*` is applied within it.)*
 
-```bash
-repoyank --preselect "src/**" --preselect "tests/test_*.py"
-```
+3.  **Interactively select only Python files from the current directory:**
+    ```bash
+    repoyank -t py '**/*.py'
+    # or more simply, if you want all python files as candidates:
+    repoyank -t py
+    ```
 
-Run in headless mode, selecting all `.rs` files in `src` and copying them directly:
+4.  **Pre-highlight all C++ test files in the TUI for review:**
+    ```bash
+    repoyank -s 'tests/**/*.cpp' src/ include/ tests/
+    ```
 
-```bash
-repoyank --headless --preselect "src/**/*.rs"
-```
+5.  **Instantly yank (skip TUI) all C++ test files:**
+    ```bash
+    repoyank -a 'tests/**/*.cpp'
+    ```
 
-After selection, your clipboard will contain output like:
+6.  **Instantly yank all Rust and Markdown files from the `src` and `docs` directories:**
+    ```bash
+    repoyank -a -t rs,md src/ docs/
+    ```
+
+7.  **See what would be yanked from Markdown files in `docs/`, without copying:**
+    ```bash
+    repoyank -n -a 'docs/**/*.md'
+    ```
+
+8.  **Include generated files (e.g., in `build/`) that are in `.gitignore`:**
+    ```bash
+    repoyank -i 'build/**/*'
+    ```
+
+### Output Format
+
+After selection (or direct yanking), your clipboard will contain output like:
 
 ```
 ./
@@ -105,7 +144,7 @@ File: README.md
 ...
 ```
 
-And provide you a helpful confirmation:
+And `repoyank` will provide a helpful confirmation:
 
 ```
 ✅ Copied 2 files (≈ 150 tokens) to the clipboard.
@@ -118,7 +157,7 @@ Clone and run locally:
 ```bash
 git clone https://github.com/TimKoornstra/repoyank.git
 cd repoyank
-cargo run -- --types rs,md
+cargo run -- -t rs,md src/
 ```
 
 ## 🤝 Contributing
