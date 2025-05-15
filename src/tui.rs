@@ -442,10 +442,10 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
             };
 
             // item.display_text contains the tree structure (e.g., "├─ dirname/")
-            // The full line is now: [Selection] [Expansion] TreeLabel
+            // The full line is now: [Expansion] [Selection] TreeLabel
             let full_line = format!(
                 "{}{}{}",
-                selection_prefix, expansion_prefix, item.display_text
+                expansion_prefix, selection_prefix, item.display_text
             );
             ListItem::new(full_line)
         })
