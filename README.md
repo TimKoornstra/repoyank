@@ -60,6 +60,7 @@ repoyank [OPTIONS] [DIR]
 | `--types <ext1,ext2,...>` | Filter by comma-separated file extensions (without dots) |
 | `--include-ignored`       | Include files ignored by `.gitignore`                    |
 | `--preselect <PATTERN>`   | Glob pattern to preselect files (e.g., "src/**/*.rs"). Can be specified multiple times.|
+| `--headless`              | Run in headless mode. Requires `--preselect`. Skips TUI. |
 | `-h`, `--help`            | Display help information                                 |
 | `-V`, `--version`         | Display version information                              |
 
@@ -71,10 +72,16 @@ Interactive selection tailored for Rust and Markdown files:
 repoyank --types rs,md
 ```
 
-Or preselect all files under `src/` and all Python test files before opening the TUI:
+Preselect all files under `src/` and all Python test files before opening the TUI:
 
 ```bash
 repoyank --preselect "src/**" --preselect "tests/test_*.py"
+```
+
+Run in headless mode, selecting all `.rs` files in `src` and copying them directly:
+
+```bash
+repoyank --headless --preselect "src/**/*.rs"
 ```
 
 After selection, your clipboard will contain output like:
