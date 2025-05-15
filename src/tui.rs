@@ -354,13 +354,13 @@ fn handle_events(app: &mut TuiApp) -> Result<()> {
                 // Process only key presses
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => app.quit = true,
-                    KeyCode::Enter => {
+                    KeyCode::Char('y') => {
                         app.confirmed = true;
                         app.quit = true;
                     }
                     KeyCode::Down | KeyCode::Char('j') => app.select_next_visible_item(),
                     KeyCode::Up | KeyCode::Char('k') => app.select_previous_visible_item(),
-                    KeyCode::Char(' ') => app.toggle_current_item_selection(),
+                    KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current_item_selection(),
                     KeyCode::Char('o') | KeyCode::Tab => {
                         app.toggle_expansion_and_adjust_selection()
                     }
@@ -382,7 +382,7 @@ fn ui_frame(frame: &mut Frame, app: &mut TuiApp) {
         ])
         .split(frame.area());
 
-    let help_text = "Arrows/jk: Navigate | Space: Toggle Select | Tab/o: Toggle Fold | Enter: Confirm | q/Esc: Quit";
+    let help_text = "Arrows/jk: Navigate | Space/Enter: Toggle Select | Tab/o: Toggle Fold | y: Confirm | q/Esc: Quit";
     let help_paragraph = Paragraph::new(help_text).block(
         Block::default()
             .borders(Borders::ALL)
