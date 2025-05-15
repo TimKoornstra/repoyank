@@ -22,6 +22,15 @@ fn main() -> Result<()> {
 
     let cli_args = cli::Cli::parse();
 
+    // Validate headless mode usage
+    if cli_args.headless && cli_args.preselect.is_empty() {
+        println!(
+            "Error: Headless mode (--headless) requires at least one preselection pattern (--preselect)."
+        );
+        println!("Example: repoyank --headless --preselect \"src/**/*.rs\"");
+        return Ok(());
+    }
+
     // 1. Scan all potential files and directories based on CLI args
     let initial_scan_results =
         file_scanner::scan_files(&cli_args.root, &cli_args.types, cli_args.include_ignored)?;
@@ -124,7 +133,7 @@ fn main() -> Result<()> {
                         for pattern in &glob_patterns {
                             if pattern.matches_path(&path_to_match) {
                                 matched_item_indices.push(idx);
-                                break; // Matched one pattern, no need to check others for this file
+                                break;
                             }
                         }
                     }
@@ -147,18 +156,36 @@ fn main() -> Result<()> {
         }
     }
 
-    // 3. Prompt the user for selections using the TUI with potentially pre-selected items
-    let tui_result_items =
+    // 3. Determine final list of items: either from TUI or directly if headless
+    let final_selected_items_list: Vec<tui::SelectableItem>;
+
+    if cli_args.headless {
+        // In headless mode, the `prepared_tui_items` after pre-selection are the final items.
+        // Check if any files were actually selected by the patterns.
+        let any_file_selected = prepared_tui_items
+            .iter()
+            .any(|item| !item.is_dir && item.state == tui::SelectionState::FullySelected);
+
+        if !any_file_selected {
+            println!(
+                "Headless mode: No files matched the preselect patterns, or no patterns resulted in file selections. Nothing to copy."
+            );
+            return Ok(());
+        }
+        final_selected_items_list = prepared_tui_items;
+    } else {
+        // Run the TUI for interactive selection
         match tui::run_tui_with_prepared_items(prepared_tui_items, &cli_args.root)? {
-            Some(items) => items,
+            Some(items) => final_selected_items_list = items,
             _ => {
                 println!("Selection cancelled. Exiting.");
                 return Ok(());
             }
-        };
+        }
+    }
 
-    // 4. Determine the actual files to include based on TUI selections
-    let mut picked_files_content: Vec<PathBuf> = tui_result_items
+    // 4. Determine the actual files to include based on final selections
+    let mut picked_files_content: Vec<PathBuf> = final_selected_items_list
         .iter()
         .filter(|item| !item.is_dir && item.state == tui::SelectionState::FullySelected)
         .map(|item| item.path.clone())
@@ -180,8 +207,7 @@ fn main() -> Result<()> {
         final_tree_node_paths_set.insert(cli_args.root.clone());
     }
 
-    for item in &tui_result_items {
-        // Include items that are fully or partially selected in the tree
+    for item in &final_selected_items_list {
         if item.state == tui::SelectionState::FullySelected
             || item.state == tui::SelectionState::PartiallySelected
         {
@@ -215,7 +241,6 @@ fn main() -> Result<()> {
         .collect();
 
     final_tree_nodes.sort_by(|(a, _), (b, _)| a.cmp(b));
-    // HashSet ensures deduplication
 
     // 6. Build the output tree
     let output_tree_labels = tree_builder::build_tree_labels(&final_tree_nodes, &cli_args.root);
@@ -228,7 +253,6 @@ fn main() -> Result<()> {
 
     // 7. Append file contents
     for file_path in &picked_files_content {
-        // This now uses the correctly filtered list
         let relative_path = file_path.strip_prefix(&cli_args.root).unwrap_or(file_path);
         match fs::read_to_string(file_path) {
             Ok(contents) => {

@@ -22,4 +22,9 @@ pub struct Cli {
     /// Can be specified multiple times using --preselect <PATTERN_1> --preselect <PATTERN_2> ...
     #[arg(long, value_name = "PATTERN")]
     pub preselect: Vec<String>,
+
+    /// Run in headless mode: select files based on --preselect and exit without TUI.
+    /// Requires --preselect to be specified.
+    #[arg(long)]
+    pub headless: bool,
 }
