@@ -1,6 +1,6 @@
 [package]
 name = "repoyank"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Tim Koornstra"]
 description = "Interactively traverse your repository, select files/directories, and quickly prepare structured snippets for LLM interactions."
