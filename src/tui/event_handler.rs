@@ -2,7 +2,7 @@ use super::app_logic::TuiApp;
 use super::app_state::AppMode;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
-use std::time::Duration; // Added missing import
+use std::time::Duration;
 
 pub(super) fn handle_events(app: &mut TuiApp) -> Result<()> {
     if event::poll(Duration::from_millis(50))? {

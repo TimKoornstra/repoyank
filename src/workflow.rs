@@ -323,7 +323,7 @@ fn generate_output_string(
     files_to_yank: &[PathBuf],
     scan_root: &Path,
     all_paths_is_dir_map: &HashMap<PathBuf, bool>,
-) -> Result<String> {
+) -> Result<(Vec<String>, String)> {
     // Determine nodes for the output tree display.
     let mut final_tree_node_paths_set = HashSet::new();
     if scan_root.exists() && scan_root.is_dir() {
@@ -385,11 +385,12 @@ fn generate_output_string(
     // Build the tree part of the output.
     let output_tree_labels = tree_builder::build_tree_labels(&final_tree_nodes, scan_root);
     let mut output_string_parts: Vec<String> = Vec::new();
-    for label in output_tree_labels {
-        output_string_parts.push(label);
-    }
-    if !output_string_parts.is_empty() || !files_to_yank.is_empty() {
-        output_string_parts.push("".to_string()); // Newline after tree.
+
+    let tree_string_for_clipboard: String = output_tree_labels.join("\n");
+
+    if !tree_string_for_clipboard.is_empty() || !files_to_yank.is_empty() {
+        output_string_parts.push(tree_string_for_clipboard);
+        output_string_parts.push("".to_string());
     }
 
     // Append file contents.
@@ -438,7 +439,7 @@ fn generate_output_string(
             final_output_string = format!("(No files selected or matched criteria)\n");
         }
     }
-    Ok(final_output_string)
+    Ok((output_tree_labels, final_output_string))
 }
 
 // Performs the final action: printing for dry-run or copying to clipboard.
@@ -447,6 +448,7 @@ fn perform_final_action(
     files_to_yank_count: usize,
     is_dry_run: bool,
     initial_scan_was_empty_and_not_default: bool,
+    output_tree_labels_for_console: &[String],
 ) -> Result<()> {
     if is_dry_run {
         print!("{}", output_string);
@@ -472,6 +474,14 @@ fn perform_final_action(
         println!("No files were ultimately selected to copy. Exiting.");
         std::process::exit(1); // Non-zero exit for actual copy operation with no files.
     } else {
+        // Print the tree structure to console
+        if !output_tree_labels_for_console.is_empty() {
+            for label in output_tree_labels_for_console {
+                println!("{}", label);
+            }
+            println!();
+        }
+
         clipboard::copy_text_to_clipboard(output_string.to_string())?;
         let tokens = utils::approx_tokens(output_string);
         println!(
@@ -575,7 +585,7 @@ pub fn run_repoyank(cli_args: cli::Cli) -> Result<()> {
             .collect();
 
     // Generate the final output string (tree + file contents).
-    let output_string = generate_output_string(
+    let (console_tree_labels, output_string_for_clipboard) = generate_output_string(
         &final_tui_items_for_tree,
         &files_to_yank,
         &scan_root,
@@ -584,10 +594,11 @@ pub fn run_repoyank(cli_args: cli::Cli) -> Result<()> {
 
     // Step 5: Perform the final action (dry-run print or copy to clipboard).
     perform_final_action(
-        &output_string,
+        &output_string_for_clipboard,
         files_to_yank.len(),
         cli_args.dry_run,
-        initial_scan_was_empty_and_not_default_pattern, // Pass this to refine "no files" messages.
+        initial_scan_was_empty_and_not_default_pattern,
+        &console_tree_labels,
     )?;
 
     Ok(())
