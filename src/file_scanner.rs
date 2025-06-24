@@ -43,7 +43,13 @@ pub fn scan_files(
             // Apply type filter only to files
             let keep = types_filter
                 .iter()
-                .any(|ext_filter_str| path.extension() == Some(OsStr::new(ext_filter_str)));
+                .any(|ext_filter_str| {
+                    let file_name = path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("");
+                    let ext_with_dot = format!(".{}", ext_filter_str);
+                    file_name.ends_with(&ext_with_dot)
+                });
             if !keep {
                 continue;
             }
