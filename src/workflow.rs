@@ -449,6 +449,7 @@ fn perform_final_action(
     is_dry_run: bool,
     initial_scan_was_empty_and_not_default: bool,
     output_tree_labels_for_console: &[String],
+    output_file: &Option<std::path::PathBuf>,
 ) -> Result<()> {
     if is_dry_run {
         print!("{}", output_string);
@@ -473,7 +474,7 @@ fn perform_final_action(
         }
         println!("No files were ultimately selected to copy. Exiting.");
         std::process::exit(1); // Non-zero exit for actual copy operation with no files.
-    } else {
+    } else if files_to_yank_count > 0 {
         // Print the tree structure to console
         if !output_tree_labels_for_console.is_empty() {
             for label in output_tree_labels_for_console {
@@ -482,12 +483,27 @@ fn perform_final_action(
             println!();
         }
 
-        clipboard::copy_text_to_clipboard(output_string.to_string())?;
         let tokens = utils::approx_tokens(output_string);
-        println!(
-            "✅ Copied {} files (≈ {} tokens) to the clipboard.",
-            files_to_yank_count, tokens
-        );
+        if let Some(output_path) = output_file.as_ref() {
+            if let Some(parent) = output_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
+            fs::write(output_path, output_string)?;
+            println!(
+                "✅ Wrote {} files (≈ {} tokens) to {}",
+                files_to_yank_count,
+                tokens,
+                output_path.display()
+            );
+        } else {
+            clipboard::copy_text_to_clipboard(output_string.to_string())?;
+            println!(
+                "✅ Copied {} files (≈ {} tokens) to the clipboard.",
+                files_to_yank_count, tokens
+            );
+        }
     }
     Ok(())
 }
@@ -599,6 +615,7 @@ pub fn run_repoyank(cli_args: cli::Cli) -> Result<()> {
         cli_args.dry_run,
         initial_scan_was_empty_and_not_default_pattern,
         &console_tree_labels,
+        &cli_args.output_file,
     )?;
 
     Ok(())
