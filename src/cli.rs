@@ -25,6 +25,7 @@ OPTIONS (see `repoyank --help` for full details):
     -s, --select <GLOB[,...]> Pre-select TUI items matching these globs.
     -i, --include-ignored     Include files ignored by .gitignore.
     -n, --dry-run             Print selection and tree, but don't copy to clipboard.
+    -o, --output <FILE>       Write output to FILE instead of clipboard.
     -h, --help                Show help.
     -V, --version             Show version.
 
@@ -81,4 +82,8 @@ pub struct Cli {
     /// Print selection and tree, but don't copy to clipboard.
     #[arg(short = 'n', long)]
     pub dry_run: bool,
+
+    /// Write output to file instead of clipboard.
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output_file: Option<std::path::PathBuf>,
 }

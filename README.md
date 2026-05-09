@@ -19,6 +19,7 @@
 - **TUI Pre-selection:** Highlight items matching glob patterns on TUI start-up.
 - **Direct Yanking (`--all`):** Skip the TUI and directly yank files matching patterns and filters.
 - **Dry Run Mode:** Preview what would be selected and copied without touching the clipboard.
+- **File Output:** Use `-o <file>` to write the generated output directly to a file instead of copying it.
 - **Clipboard Integration:** Works smoothly across Linux (Wayland/X11), macOS, and Windows via `arboard`.
 - **Git-aware:** Optional inclusion of files normally ignored by `.gitignore`.
 
@@ -72,6 +73,7 @@ repoyank [OPTIONS] [PATTERN ...]
 | `-s`  | `--select <GLOB[,...]>` | Pre-select items in the TUI matching these globs. Globs are relative to the scan root. User can still change pick. |
 | `-i`  | `--include-ignored`     | Include files that are normally excluded by `.gitignore`.                                                             |
 | `-n`  | `--dry-run`             | Print the final tree and selection summary, but **don't** touch the clipboard.                                    |
+| `-o`  | `--output <FILE>`       | Write generated output to `FILE` instead of copying to the clipboard.                                              |
 | `-h`  | `--help`                | Show help information.                                                                                              |
 | `-V`  | `--version`             | Show version information.                                                                                           |
 
@@ -117,6 +119,16 @@ repoyank [OPTIONS] [PATTERN ...]
     repoyank -n -a 'docs/**/*.md'
     ```
 
+8.  **Write all matching Rust files to a file, including from a subdirectory:**
+    ```bash
+    repoyank -a -t rs src/ -o /tmp/repoyank-output.txt
+    ```
+
+9.  **Use a relative output path from your current directory:**
+    ```bash
+    repoyank -a 'docs/**/*.md' -o exports/docs-snippet.md
+    ```
+
 8.  **Include generated files (e.g., in `build/`) that are in `.gitignore`:**
     ```bash
     repoyank -i 'build/**/*'
@@ -144,7 +156,7 @@ File: README.md
 ...
 ```
 
-And `repoyank` will provide a helpful confirmation on your console, including the tree structure that was copied:
+And `repoyank` will provide a helpful confirmation on your console, including the tree structure that was copied or saved:
 
 ```
 ./
